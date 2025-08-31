@@ -1,10 +1,10 @@
 #create conda env
 ```sh
-conda create -n steppie
+conda create -n CADapp
 ```
 #activate conda env
 ```sh
-conda activate steppie
+conda activate CADapp
 ```
 
 #install pythonocc-core
@@ -13,7 +13,7 @@ conda install -c conda-forge pythonocc-core
 ```
 #install flask cors
 ```sh
-pip install flask flask-cors cadquery
+pip install flask flask-cors 
 ```
 #check pythonocc installation
 ```sh
