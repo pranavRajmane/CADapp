@@ -15,6 +15,7 @@ import uuid
 import base64
 from werkzeug.utils import secure_filename
 from datetime import datetime
+import math
 
 # PythonOCC imports
 from OCC.Core.STEPControl import STEPControl_Reader
@@ -31,7 +32,7 @@ from OCC.Core.TopoDS import topods
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeCylinder 
 from OCC.Core.BRepBndLib import brepbndlib
 from OCC.Core.Bnd import Bnd_Box
-from OCC.Core.gp import gp_Trsf, gp_Vec
+from OCC.Core.gp import gp_Trsf, gp_Vec, gp_Ax1
 # Create Flask app with static file support
 app = Flask(__name__)
 CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["*"])
@@ -336,6 +337,61 @@ def process_step_file(file_path):
         import traceback
         traceback.print_exc()
         raise e
+
+@app.route('/api/transform/<shape_id>', methods=['POST'])
+def transform_shape(shape_id):
+    """Apply transformations (translation, rotation) to a shape."""
+    try:
+        if shape_id not in scene_objects:
+            return jsonify({'success': False, 'error': 'Shape not found'}), 404
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No transformation data provided'}), 400
+
+        shape = scene_objects[shape_id]
+
+        # Handle Translation (Displacement)
+        if 'translation' in data:
+            trans = data['translation']
+            dx, dy, dz = trans.get('x', 0), trans.get('y', 0), trans.get('z', 0)
+            if dx != 0 or dy != 0 or dz != 0:
+                transform = gp_Trsf()
+                transform.SetTranslation(gp_Vec(dx, dy, dz))
+                shape.Move(TopLoc_Location(transform))
+                print(f"Translated shape {shape_id} by vector ({dx}, {dy}, {dz})")
+
+        # Handle Rotation (Angular)
+        if 'rotation' in data:
+            rot = data['rotation']
+            axis = rot.get('axis', [0, 0, 1])
+            angle_deg = rot.get('angle', 0)
+            if angle_deg != 0:
+                transform = gp_Trsf()
+                angle_rad = math.radians(angle_deg)
+                # Rotation axis is defined by a point (origin) and a direction vector
+                rotation_axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Vec(axis[0], axis[1], axis[2]))
+                transform.SetRotation(rotation_axis, angle_rad)
+                shape.Move(TopLoc_Location(transform))
+                print(f"Rotated shape {shape_id} by {angle_deg} degrees around axis {axis}")
+
+        # Update the stored shape with the transformed one
+        scene_objects[shape_id] = shape
+
+        # Re-tessellate and get new mesh data
+        new_mesh_data = extract_mesh_data(shape, shape_id)
+
+        return jsonify({
+            'success': True,
+            'message': f'Shape {shape_id} transformed successfully',
+            'mesh': new_mesh_data
+        })
+
+    except Exception as e:
+        print(f"❌ Error in transform_shape: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 # ========================
 # STL EXPORT ENDPOINTS
 # ========================

@@ -29,4 +29,17 @@ export const ApiHandler = {
         }
         return response.json();
     },
+
+    async transformShape(shapeId, transformation) {
+        const response = await fetch(`http://localhost:3000/api/transform/${shapeId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(transformation),
+        });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to transform shape');
+        }
+        return response.json();
+    },
 };

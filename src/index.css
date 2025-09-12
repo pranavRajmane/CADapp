@@ -325,3 +325,76 @@ body {
     background: rgba(255, 255, 255, 0.2);
     transform: translateY(-2px);
 }
+
+/* Transform Controls Panel */
+.transform-controls {
+    position: absolute;
+    top: 100px;
+    left: 20px;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    padding: 15px;
+    width: 280px;
+    color: white;
+    backdrop-filter: blur(10px);
+    font-size: 0.9rem;
+}
+
+.transform-controls h4 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 10px;
+}
+
+.transform-controls .control-group {
+    margin-bottom: 15px;
+}
+
+.transform-controls label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.transform-controls .input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.transform-controls .input-row span {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.transform-controls input[type="number"],
+.transform-controls select {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 0.9rem;
+}
+
+.transform-controls button {
+    width: 100%;
+    padding: 10px;
+    background: #ac0404;
+    border: none;
+    color: white;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    transition: background 0.2s ease;
+}
+
+.transform-controls button:hover {
+    background: #c20000;
+}
