@@ -271,8 +271,8 @@ body {
     }
 }
 
-/* CAD Toolbar Styles */
-.viewport-toolbar {
+/* --- NEW: Top Toolbar --- */
+.viewport-top-toolbar {
     position: absolute;
     top: 20px;
     left: 50%;
@@ -297,6 +297,14 @@ body {
     cursor: pointer;
     font-size: 1.5rem;
     transition: all 0.2s ease;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.tool-button svg {
+    width: 24px;
+    height: 24px;
 }
 
 .tool-button:hover {
@@ -304,9 +312,10 @@ body {
     border-color: rgba(255, 255, 255, 0.3);
 }
 
-.tool-button:active {
+/* --- NEW: Active state for toolbar buttons --- */
+.tool-button.active {
     background: #c20000;
-    transform: scale(0.95);
+    border-color: #ff6b6b;
 }
 
 .canvas-button {
@@ -326,23 +335,23 @@ body {
     transform: translateY(-2px);
 }
 
-/* Transform Controls Panel */
-.transform-controls {
+/* --- NEW: Transform Info Panel --- */
+.transform-info-panel {
     position: absolute;
-    top: 100px;
+    top: 90px; /* Adjusted position */
     left: 20px;
     z-index: 100;
     background: rgba(0, 0, 0, 0.8);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 12px;
     padding: 15px;
-    width: 280px;
+    width: 250px;
     color: white;
     backdrop-filter: blur(10px);
     font-size: 0.9rem;
 }
 
-.transform-controls h4 {
+.transform-info-panel h4 {
     margin-top: 0;
     margin-bottom: 15px;
     font-size: 1rem;
@@ -350,51 +359,25 @@ body {
     padding-bottom: 10px;
 }
 
-.transform-controls .control-group {
-    margin-bottom: 15px;
+.transform-info-panel p {
+    margin-bottom: 10px;
 }
 
-.transform-controls label {
-    display: block;
-    margin-bottom: 8px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.8);
-}
-
-.transform-controls .input-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.transform-controls .input-row span {
-    color: rgba(255, 255, 255, 0.6);
-}
-
-.transform-controls input[type="number"],
-.transform-controls select {
-    width: 100%;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    color: white;
-    padding: 8px;
-    border-radius: 6px;
+.info-grid {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px 15px;
     font-size: 0.9rem;
 }
 
-.transform-controls button {
-    width: 100%;
-    padding: 10px;
-    background: #ac0404;
-    border: none;
-    color: white;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 1rem;
-    font-weight: 600;
-    transition: background 0.2s ease;
+.info-grid span:nth-child(odd) {
+    color: rgba(255, 255, 255, 0.7);
 }
 
-.transform-controls button:hover {
-    background: #c20000;
+.info-grid span:nth-child(even) {
+    font-weight: 600;
+    text-align: right;
+    background-color: rgba(255,255,255,0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
 }
