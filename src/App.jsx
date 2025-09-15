@@ -11,6 +11,7 @@ function App() {
     const [meshes, setMeshes] = useState([]);
     const [sceneApi, setSceneApi] = useState(null); // To control the scene from the App
     const [selectedShapeId, setSelectedShapeId] = useState(null);
+    const [selectedFaceIds, setSelectedFaceIds] = useState([]); // MODIFIED: State for selected faces
     const [isTransformModeActive, setIsTransformModeActive] = useState(false);
 
     const handleFileProcessing = async (file) => {
@@ -44,6 +45,7 @@ function App() {
     const handleBackToUpload = () => {
         setMeshes([]);
         setSelectedShapeId(null);
+        setSelectedFaceIds([]); // Reset face selection
         setIsTransformModeActive(false); // Reset transform mode
         setView('upload');
     };
@@ -51,6 +53,7 @@ function App() {
     const handleClearScene = () => {
         setMeshes([]); // Setting meshes to empty array will trigger the cleanup effect in Viewport
         setSelectedShapeId(null);
+        setSelectedFaceIds([]); // Reset face selection
         setIsTransformModeActive(false); // Reset transform mode
     };
 
@@ -73,7 +76,21 @@ function App() {
 
     const handleObjectSelected = useCallback((shapeId) => {
         setSelectedShapeId(shapeId);
+        // When a new object is selected, always clear the face selection
+        setSelectedFaceIds([]);
     }, []);
+
+    // MODIFIED: Handler for toggling multiple face selections
+    const handleFaceSelected = useCallback((faceId) => {
+        setSelectedFaceIds(prevIds => {
+            if (prevIds.includes(faceId)) {
+                return prevIds.filter(id => id !== faceId); // Deselect
+            } else {
+                return [...prevIds, faceId]; // Select
+            }
+        });
+    }, []);
+
 
     const onSceneReady = useCallback((api) => {
         setSceneApi(api);
@@ -101,7 +118,6 @@ function App() {
                     ← Back to Upload
                 </button>
             </div>
-            {/* --- MODIFIED: Main toolbar at the top --- */}
             <div className="viewport-top-toolbar">
                  <button 
                     className={`tool-button ${isTransformModeActive ? 'active' : ''}`} 
@@ -121,8 +137,10 @@ function App() {
                 initialMeshes={meshes}
                 onSceneReady={onSceneReady}
                 onObjectSelected={handleObjectSelected}
+                onFaceSelected={handleFaceSelected} // Pass down the new handler
                 selectedShapeId={selectedShapeId}
-                isTransformModeActive={isTransformModeActive} // Pass mode state down
+                selectedFaceIds={selectedFaceIds} // Pass down the array of selected face IDs
+                isTransformModeActive={isTransformModeActive}
             />
         </div>
     );

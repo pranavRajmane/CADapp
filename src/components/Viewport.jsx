@@ -9,14 +9,21 @@ function lerp(start, end, alpha) {
     return start * (1 - alpha) + end * alpha;
 }
 
-export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
+export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, selectedShapeId, selectedFaceIds }) {
     const mountRef = useRef(null);
     const sceneRefs = useRef({}).current;
     
+    // Use refs for props that change often to avoid re-running the main setup effect
     const selectedShapeIdRef = useRef(selectedShapeId);
     useEffect(() => {
         selectedShapeIdRef.current = selectedShapeId;
     }, [selectedShapeId]);
+
+    const selectedFaceIdsRef = useRef(selectedFaceIds);
+    useEffect(() => {
+        selectedFaceIdsRef.current = selectedFaceIds;
+    }, [selectedFaceIds]);
+
 
     // --- Main setup effect, runs only once ---
     useEffect(() => {
@@ -176,13 +183,30 @@ export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
         const handleMainMouseDown = (event) => {
             event.preventDefault();
             if (transformControls.dragging) return;
+        
             const rect = renderer.domElement.getBoundingClientRect();
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects(scene.children, true);
             const firstIntersected = intersects.find(i => i.object.isMesh && i.object.userData.isCadObject);
-            onObjectSelected(firstIntersected ? firstIntersected.object.userData.id : null);
+        
+            if (firstIntersected) {
+                const objectId = firstIntersected.object.userData.id;
+                // If we clicked a new object, select it. App state will clear face selection.
+                if (objectId !== selectedShapeIdRef.current) {
+                    onObjectSelected(objectId);
+                } else {
+                    // If we clicked the same object, proceed with face selection
+                    const faceIndex = firstIntersected.faceIndex;
+                    const faceId = firstIntersected.object.userData.faceIdByTriangle[faceIndex];
+                    onFaceSelected(faceId); // App state will toggle this face ID
+                }
+            } else {
+                // Clicked on background, clear all selections. App state will clear faces.
+                onObjectSelected(null);
+            }
         };
 
         const handleViewCubeMouseDown = (event) => {
@@ -219,14 +243,12 @@ export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
             boundingBox.getCenter(center);
 
             if (boundingBox.isEmpty()) {
-                // If scene is empty, focus on the origin
                 center.set(0,0,0);
             }
 
             const size = new THREE.Vector3();
             boundingBox.getSize(size);
             const maxDim = Math.max(size.x, size.y, size.z);
-            // Use a default distance if the scene is empty, otherwise calculate
             const distance = boundingBox.isEmpty() ? 100 : maxDim * 1.5;
 
             const newPos = new THREE.Vector3();
@@ -281,7 +303,7 @@ export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
                 renderer.domElement.parentElement.removeChild(renderer.domElement);
             }
         };
-    }, [sceneRefs, onObjectSelected]);
+    }, [sceneRefs, onObjectSelected, onFaceSelected]);
 
     // --- Effect for rebuilding scene when meshes change ---
     useEffect(() => {
@@ -293,6 +315,7 @@ export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
             if (obj.userData.isCadObject) {
                 scene.remove(obj);
                 obj.geometry.dispose();
+                // Check if material is an array or single object before disposing
                 if (Array.isArray(obj.material)) {
                     obj.material.forEach(material => material.dispose());
                 } else {
@@ -318,13 +341,21 @@ export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
             geometry.setIndex(meshData.indices);
             geometry.computeVertexNormals();
 
+            const colors = new Float32Array(vertices.length);
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
             const material = new THREE.MeshStandardMaterial({
-                color: 0xcccccc, metalness: 0.5, roughness: 0.5, side: THREE.DoubleSide
+                metalness: 0.5,
+                roughness: 0.5,
+                side: THREE.DoubleSide,
+                vertexColors: true
             });
 
             const mesh = new THREE.Mesh(geometry, material);
             mesh.userData.id = meshData.id;
-            mesh.userData.isCadObject = true; 
+            mesh.userData.isCadObject = true;
+            mesh.userData.facesData = meshData.faces;
+            mesh.userData.faceIdByTriangle = meshData.faceIdByTriangle;
             scene.add(mesh);
         });
         
@@ -358,31 +389,62 @@ export function Viewport({ initialMeshes, onObjectSelected, selectedShapeId }) {
 
     }, [initialMeshes, sceneRefs]);
 
-    // --- Effect for attaching/detaching TransformControls ---
+    // --- Effect for object and face selection highlighting ---
     useEffect(() => {
-        if (!sceneRefs.scene || !sceneRefs.transformControls) return;
-        const { scene, transformControls } = sceneRefs;
-
-        if (transformControls.object) {
-            transformControls.detach();
-        }
-
-        let hasSelection = false;
+        if (!sceneRefs.scene) return;
+        const { scene } = sceneRefs;
+    
+        const baseColor = new THREE.Color(0xcccccc);
+        const selectionColor = new THREE.Color(0xffff00); // Yellow for object selection
+        const faceHighlightColor = new THREE.Color(0x00aaff); // Blue for face highlight
+    
         scene.children.forEach(child => {
-            if (child.isMesh && child.userData.isCadObject && child.material) {
-                const isSelected = child.userData.id === selectedShapeId;
-                child.material.emissive.set(isSelected ? 0xffff00 : 0x000000);
+            if (child.isMesh && child.userData.isCadObject && child.geometry.attributes.color) {
+                const isSelectedObject = child.userData.id === selectedShapeId;
+                const colorAttribute = child.geometry.attributes.color;
+    
+                const currentColor = isSelectedObject ? selectionColor : baseColor;
+    
+                for (let i = 0; i < colorAttribute.count; i++) {
+                    colorAttribute.setXYZ(i, currentColor.r, currentColor.g, currentColor.b);
+                }
+    
+                // MODIFIED: Handle multiple face selections
+                if (isSelectedObject && selectedFaceIds && selectedFaceIds.length > 0 && child.userData.facesData) {
+                    
+                    // Build a map of face IDs to their vertex info for quick lookups
+                    const faceInfoMap = new Map();
+                    let vertexOffset = 0;
+                    for(const f of child.userData.facesData) {
+                        faceInfoMap.set(f.id, { offset: vertexOffset, count: f.vertexCount });
+                        vertexOffset += f.vertexCount;
+                    }
 
-                if (isSelected) {
-                    transformControls.attach(child);
-                    hasSelection = true;
+                    selectedFaceIds.forEach(faceId => {
+                        const faceInfo = faceInfoMap.get(faceId);
+                        if (faceInfo) {
+                            for (let i = 0; i < faceInfo.count; i++) {
+                                const vertexIndex = faceInfo.offset + i;
+                                colorAttribute.setXYZ(vertexIndex, faceHighlightColor.r, faceHighlightColor.g, faceHighlightColor.b);
+                            }
+                        }
+                    });
+                }
+    
+                colorAttribute.needsUpdate = true;
+    
+                if (!isSelectedObject && sceneRefs.transformControls.object === child) {
+                    sceneRefs.transformControls.detach();
+                } else if (isSelectedObject) {
+                    sceneRefs.transformControls.attach(child);
                 }
             }
         });
-
-        transformControls.visible = hasSelection;
-
-    }, [selectedShapeId, initialMeshes, sceneRefs]);
+    
+        sceneRefs.transformControls.visible = !!selectedShapeId;
+    
+    }, [selectedShapeId, selectedFaceIds, initialMeshes, sceneRefs]);
+    
 
     return <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />;
 }
