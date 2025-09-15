@@ -381,3 +381,50 @@ body {
     padding: 2px 6px;
     border-radius: 4px;
 }
+
+/* ... (keep all existing styles) ... */
+
+/* --- NEW: Recognition Info Panel --- */
+.recognition-info-panel {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    z-index: 100;
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 10px 15px;
+    color: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(10px);
+    font-size: 0.9rem;
+    pointer-events: none; /* So it doesn't block clicks */
+}
+.recognition-info-panel b {
+    color: white;
+    font-weight: 600;
+}
+
+/* --- NEW: Loading Overlay for Recognition --- */
+.loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 200;
+}
+
+.loading-overlay .spinner {
+    width: 50px;
+    height: 50px;
+    margin-bottom: 15px;
+}
+.loading-overlay .loading-text {
+    font-size: 1.2rem;
+    color: white;
+}

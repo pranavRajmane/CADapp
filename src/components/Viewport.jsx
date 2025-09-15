@@ -3,17 +3,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 
-// --- TWEENING HELPER ---
-// Simple linear interpolation function
-function lerp(start, end, alpha) {
-    return start * (1 - alpha) + end * alpha;
-}
-
-export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, selectedShapeId, selectedFaceIds }) {
+export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, selectedShapeId, selectedFaceIds, recognizedShape }) {
     const mountRef = useRef(null);
-    const sceneRefs = useRef({}).current;
-    
-    // Use refs for props that change often to avoid re-running the main setup effect
+    // CORRECTED: Initialize the ref object itself, not its .current property.
+    const sceneRefs = useRef({});
+
     const selectedShapeIdRef = useRef(selectedShapeId);
     useEffect(() => {
         selectedShapeIdRef.current = selectedShapeId;
@@ -23,7 +17,6 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
     useEffect(() => {
         selectedFaceIdsRef.current = selectedFaceIds;
     }, [selectedFaceIds]);
-
 
     // --- Main setup effect, runs only once ---
     useEffect(() => {
@@ -58,64 +51,13 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
-        // --- AXIS & CUBE SCENE SETUP (They share a scene) ---
-        const overlayScene = new THREE.Scene();
-        overlayScene.background = backgroundColor;
-        const frustumSize = 4.5;
-        const aspect = 1;
-        const overlayCamera = new THREE.OrthographicCamera(
-            frustumSize * aspect / -2, frustumSize * aspect / 2,
-            frustumSize / 2, frustumSize / -2, 0.1, 100
-        );
-        overlayCamera.position.set(5, 5, 5);
-        overlayCamera.lookAt(0, 0, 0);
+        const recognizedShapeHelper = null; // We'll manage this mesh directly
 
-        // --- REFERENCE AXIS SETUP ---
-        const axisGroup = new THREE.Group();
-        overlayScene.add(axisGroup);
-        
-        const origin = new THREE.Vector3(0, 0, 0);
-        const length = 1.5;
-        axisGroup.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, length, 0xff0000));
-        axisGroup.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), origin, length, 0x00ff00));
-        axisGroup.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), origin, length, 0x0000ff));
-
-        // --- VIEW CUBE SETUP ---
-        function makeViewLabelCanvas(text) {
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-            const size = 128;
-            canvas.width = size;
-            canvas.height = size;
-            context.fillStyle = 'rgba(40, 40, 40, 0.9)';
-            context.fillRect(0, 0, size, size);
-            context.font = `bold 48px Arial`;
-            context.fillStyle = '#ffffff';
-            context.textAlign = 'center';
-            context.textBaseline = 'middle';
-            context.fillText(text, size / 2, size / 2);
-            return canvas;
-        }
-
-        const cubeMaterials = [
-            new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(makeViewLabelCanvas('RIGHT')) }), // +X
-            new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(makeViewLabelCanvas('LEFT')) }),  // -X
-            new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(makeViewLabelCanvas('TOP')) }),   // +Y
-            new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(makeViewLabelCanvas('BOTTOM')) }),// -Y
-            new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(makeViewLabelCanvas('FRONT')) }), // +Z
-            new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(makeViewLabelCanvas('BACK')) })   // -Z
-        ];
-        const cubeGeometry = new THREE.BoxGeometry(2, 2, 2);
-        const viewCube = new THREE.Mesh(cubeGeometry, cubeMaterials);
-        viewCube.position.set(0, 0, 0);
-        overlayScene.add(viewCube);
-        
-        let transitionTarget = null; 
-
-        Object.assign(sceneRefs, { 
+        // CORRECTED: Assign properties to the .current object.
+        sceneRefs.current = { 
             scene, camera, renderer, controls, raycaster, mouse, transformControls,
-            overlayScene, overlayCamera, axisGroup, viewCube, transitionTarget
-        });
+            recognizedShapeHelper
+        };
 
         const handleResize = () => {
             camera.aspect = currentMount.clientWidth / currentMount.clientHeight;
@@ -127,56 +69,7 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
         const animate = () => {
             requestAnimationFrame(animate);
             controls.update();
-
-            if (sceneRefs.transitionTarget) {
-                const { pos, target } = sceneRefs.transitionTarget;
-                camera.position.lerp(pos, 0.1);
-                controls.target.lerp(target, 0.1);
-                if (camera.position.distanceTo(pos) < 0.1) {
-                    sceneRefs.transitionTarget = null;
-                }
-            }
-            
-            renderer.setScissorTest(false);
-            renderer.setViewport(0, 0, currentMount.clientWidth, currentMount.clientHeight);
             renderer.render(scene, camera);
-
-            const { overlayScene, overlayCamera, axisGroup: ag, scene: mainScene, camera: mainCamera, viewCube: vc } = sceneRefs;
-            const selectedObject = mainScene.getObjectByProperty('userData.id', selectedShapeIdRef.current);
-            
-            const inverseQuaternion = mainCamera.quaternion.clone().invert();
-            if (selectedObject) {
-                selectedObject.getWorldQuaternion(ag.quaternion);
-            } else {
-                ag.quaternion.copy(inverseQuaternion);
-            }
-            vc.quaternion.copy(inverseQuaternion);
-
-            renderer.clearDepth();
-            renderer.setScissorTest(true);
-
-            const viewportSize = 120;
-            const inset = 10;
-            
-            // --- RENDER REF AXIS (TOP-RIGHT) ---
-            vc.visible = false;
-            ag.visible = true;
-            const axisVpX = currentMount.clientWidth - viewportSize - inset;
-            const axisVpY = currentMount.clientHeight - viewportSize - inset;
-            renderer.setScissor(axisVpX, axisVpY, viewportSize, viewportSize);
-            renderer.setViewport(axisVpX, axisVpY, viewportSize, viewportSize);
-            renderer.render(overlayScene, overlayCamera);
-
-            // --- RENDER VIEW CUBE (BOTTOM-RIGHT) ---
-            vc.visible = true;
-            ag.visible = false;
-            const cubeVpX = currentMount.clientWidth - viewportSize - inset;
-            const cubeVpY = inset;
-            renderer.setScissor(cubeVpX, cubeVpY, viewportSize, viewportSize);
-            renderer.setViewport(cubeVpX, cubeVpY, viewportSize, viewportSize);
-            renderer.render(overlayScene, overlayCamera);
-
-            renderer.setScissorTest(false);
         };
         animate();
 
@@ -194,100 +87,25 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
         
             if (firstIntersected) {
                 const objectId = firstIntersected.object.userData.id;
-                // If we clicked a new object, select it. App state will clear face selection.
                 if (objectId !== selectedShapeIdRef.current) {
                     onObjectSelected(objectId);
                 } else {
-                    // If we clicked the same object, proceed with face selection
                     const faceIndex = firstIntersected.faceIndex;
                     const faceId = firstIntersected.object.userData.faceIdByTriangle[faceIndex];
-                    onFaceSelected(faceId); // App state will toggle this face ID
+                    onFaceSelected(faceId); 
                 }
             } else {
-                // Clicked on background, clear all selections. App state will clear faces.
                 onObjectSelected(null);
             }
         };
+        renderer.domElement.addEventListener('mousedown', handleMainMouseDown);
 
-        const handleViewCubeMouseDown = (event) => {
-            const viewportSize = 120;
-            const inset = 10;
-            const vpX = currentMount.clientWidth - viewportSize - inset;
-            const vpY_fromTop = currentMount.clientHeight - viewportSize - inset;
-            
-            const relativeX = event.clientX - vpX;
-            const relativeY = event.clientY - vpY_fromTop;
-
-            const cubeMouse = new THREE.Vector2();
-            cubeMouse.x = (relativeX / viewportSize) * 2 - 1;
-            cubeMouse.y = -(relativeY / viewportSize) * 2 + 1;
-
-            const cubeRaycaster = new THREE.Raycaster();
-            cubeRaycaster.setFromCamera(cubeMouse, overlayCamera);
-            const intersects = cubeRaycaster.intersectObject(sceneRefs.viewCube);
-
-            if (intersects.length > 0) {
-                const faceIndex = intersects[0].face.materialIndex;
-                const viewMap = ['right', 'left', 'top', 'bottom', 'front', 'back'];
-                setCameraView(viewMap[faceIndex]);
-            }
-        };
-        
-        const setCameraView = (view) => {
-            const boundingBox = new THREE.Box3();
-            scene.children.forEach(child => {
-                if (child.userData.isCadObject) boundingBox.expandByObject(child);
-            });
-            
-            const center = new THREE.Vector3();
-            boundingBox.getCenter(center);
-
-            if (boundingBox.isEmpty()) {
-                center.set(0,0,0);
-            }
-
-            const size = new THREE.Vector3();
-            boundingBox.getSize(size);
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const distance = boundingBox.isEmpty() ? 100 : maxDim * 1.5;
-
-            const newPos = new THREE.Vector3();
-            switch(view) {
-                case 'top': newPos.set(center.x, center.y + distance, center.z); break;
-                case 'bottom': newPos.set(center.x, center.y - distance, center.z); break;
-                case 'left': newPos.set(center.x - distance, center.y, center.z); break;
-                case 'right': newPos.set(center.x + distance, center.y, center.z); break;
-                case 'front': newPos.set(center.x, center.y, center.z + distance); break;
-                case 'back': newPos.set(center.x, center.y, center.z - distance); break;
-            }
-            
-            sceneRefs.transitionTarget = { pos: newPos, target: center };
-        };
-
-        const handleMouseDown = (event) => {
-            const viewportSize = 120;
-            const inset = 10;
-            
-            const cubeVpX = currentMount.clientWidth - viewportSize - inset;
-            const cubeVpY_fromTop = currentMount.clientHeight - viewportSize - inset; 
-            
-            if (event.clientX >= cubeVpX && event.clientY >= cubeVpY_fromTop) {
-                 handleViewCubeMouseDown(event);
-            } else {
-                 handleMainMouseDown(event);
-            }
-        };
-
-        renderer.domElement.addEventListener('mousedown', handleMouseDown);
-        
         const handleKeyDown = (event) => {
             switch (event.key) {
                 case 'q': transformControls.setSpace(transformControls.space === 'local' ? 'world' : 'local'); break;
                 case 'w': transformControls.setMode('translate'); break;
                 case 'e': transformControls.setMode('rotate'); break;
                 case 'r': transformControls.setMode('scale'); break;
-                case '+': case '=': transformControls.setSize(transformControls.size + 0.1); break;
-                case '-': case '_': transformControls.setSize(Math.max(transformControls.size - 0.1, 0.1)); break;
                 case ' ': transformControls.enabled = !transformControls.enabled; break;
                 case 'Escape': transformControls.reset(); break;
             }
@@ -297,25 +115,24 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
         return () => {
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('keydown', handleKeyDown);
-            renderer.domElement.removeEventListener('mousedown', handleMouseDown);
+            renderer.domElement.removeEventListener('mousedown', handleMainMouseDown);
             transformControls.dispose();
             if(renderer.domElement.parentElement) {
                 renderer.domElement.parentElement.removeChild(renderer.domElement);
             }
         };
-    }, [sceneRefs, onObjectSelected, onFaceSelected]);
+    }, []);
 
-    // --- Effect for rebuilding scene when meshes change ---
     useEffect(() => {
-        if (!sceneRefs.scene || !initialMeshes) return;
-        const { scene } = sceneRefs;
+        // CORRECTED: Access scene via .current and check if it's initialized
+        if (!sceneRefs.current.scene || !initialMeshes) return;
+        const { scene } = sceneRefs.current;
 
         for (let i = scene.children.length - 1; i >= 0; i--) {
             const obj = scene.children[i];
             if (obj.userData.isCadObject) {
                 scene.remove(obj);
                 obj.geometry.dispose();
-                // Check if material is an array or single object before disposing
                 if (Array.isArray(obj.material)) {
                     obj.material.forEach(material => material.dispose());
                 } else {
@@ -324,13 +141,7 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
             }
         }
 
-        if (initialMeshes.length === 0) {
-            const { camera, controls } = sceneRefs;
-            controls.target.set(0,0,0);
-            camera.position.set(50,50,50);
-            controls.update();
-            return;
-        };
+        if (initialMeshes.length === 0) return;
 
         initialMeshes.forEach(meshData => {
             if (!meshData || !meshData.vertices || !meshData.indices) return;
@@ -345,10 +156,7 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
             const material = new THREE.MeshStandardMaterial({
-                metalness: 0.5,
-                roughness: 0.5,
-                side: THREE.DoubleSide,
-                vertexColors: true
+                metalness: 0.5, roughness: 0.5, side: THREE.DoubleSide, vertexColors: true
             });
 
             const mesh = new THREE.Mesh(geometry, material);
@@ -358,74 +166,39 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
             mesh.userData.faceIdByTriangle = meshData.faceIdByTriangle;
             scene.add(mesh);
         });
-        
-        const { camera, controls } = sceneRefs;
-        const boundingBox = new THREE.Box3();
-        
-        scene.children.forEach(child => {
-            if (child.userData.isCadObject) {
-                boundingBox.expandByObject(child);
-            }
-        });
+    // CORRECTED: Removed sceneRefs from dependencies
+    }, [initialMeshes]);
 
-        if (!boundingBox.isEmpty()) {
-            const center = new THREE.Vector3();
-            boundingBox.getCenter(center);
-            controls.target.copy(center);
-            
-            const size = new THREE.Vector3();
-            boundingBox.getSize(size);
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const fov = camera.fov * (Math.PI / 180);
-            let cameraZ = Math.abs(maxDim / 2 / Math.tan(fov / 2));
-            cameraZ *= 1.5;
-            
-            if (cameraZ > 0.1) {
-                camera.position.set(center.x, center.y, center.z + cameraZ);
-            }
-        }
-        
-        controls.update();
-
-    }, [initialMeshes, sceneRefs]);
-
-    // --- Effect for object and face selection highlighting ---
     useEffect(() => {
-        if (!sceneRefs.scene) return;
-        const { scene } = sceneRefs;
+        if (!sceneRefs.current.scene) return;
+        const { scene, transformControls } = sceneRefs.current;
     
         const baseColor = new THREE.Color(0xcccccc);
-        const selectionColor = new THREE.Color(0xffff00); // Yellow for object selection
-        const faceHighlightColor = new THREE.Color(0x00aaff); // Blue for face highlight
+        const selectionColor = new THREE.Color(0xffff00); 
+        const faceHighlightColor = new THREE.Color(0x00aaff); 
     
         scene.children.forEach(child => {
             if (child.isMesh && child.userData.isCadObject && child.geometry.attributes.color) {
                 const isSelectedObject = child.userData.id === selectedShapeId;
                 const colorAttribute = child.geometry.attributes.color;
-    
                 const currentColor = isSelectedObject ? selectionColor : baseColor;
     
                 for (let i = 0; i < colorAttribute.count; i++) {
                     colorAttribute.setXYZ(i, currentColor.r, currentColor.g, currentColor.b);
                 }
     
-                // MODIFIED: Handle multiple face selections
                 if (isSelectedObject && selectedFaceIds && selectedFaceIds.length > 0 && child.userData.facesData) {
-                    
-                    // Build a map of face IDs to their vertex info for quick lookups
                     const faceInfoMap = new Map();
                     let vertexOffset = 0;
                     for(const f of child.userData.facesData) {
                         faceInfoMap.set(f.id, { offset: vertexOffset, count: f.vertexCount });
                         vertexOffset += f.vertexCount;
                     }
-
                     selectedFaceIds.forEach(faceId => {
                         const faceInfo = faceInfoMap.get(faceId);
                         if (faceInfo) {
                             for (let i = 0; i < faceInfo.count; i++) {
-                                const vertexIndex = faceInfo.offset + i;
-                                colorAttribute.setXYZ(vertexIndex, faceHighlightColor.r, faceHighlightColor.g, faceHighlightColor.b);
+                                colorAttribute.setXYZ(faceInfo.offset + i, faceHighlightColor.r, faceHighlightColor.g, faceHighlightColor.b);
                             }
                         }
                     });
@@ -433,19 +206,49 @@ export function Viewport({ initialMeshes, onObjectSelected, onFaceSelected, sele
     
                 colorAttribute.needsUpdate = true;
     
-                if (!isSelectedObject && sceneRefs.transformControls.object === child) {
-                    sceneRefs.transformControls.detach();
+                if (!isSelectedObject && transformControls.object === child) {
+                    transformControls.detach();
                 } else if (isSelectedObject) {
-                    sceneRefs.transformControls.attach(child);
+                    transformControls.attach(child);
                 }
             }
         });
     
-        sceneRefs.transformControls.visible = !!selectedShapeId;
-    
-    }, [selectedShapeId, selectedFaceIds, initialMeshes, sceneRefs]);
-    
+        transformControls.visible = !!selectedShapeId;
+    // CORRECTED: Removed sceneRefs from dependencies
+    }, [selectedShapeId, selectedFaceIds, initialMeshes]);
+
+    useEffect(() => {
+        if (!sceneRefs.current.scene) return;
+        const refs = sceneRefs.current;
+
+        if (refs.recognizedShapeHelper) {
+            refs.scene.remove(refs.recognizedShapeHelper);
+            refs.recognizedShapeHelper.geometry.dispose();
+            refs.recognizedShapeHelper.material.dispose();
+            refs.recognizedShapeHelper = null;
+        }
+
+        if (recognizedShape && recognizedShape.success && recognizedShape.shape === 'Cylinder') {
+            const { radius, height, center, axis } = recognizedShape;
+
+            const geometry = new THREE.CylinderGeometry(radius, radius, height, 32, 1, false);
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x00ff00, transparent: true, opacity: 0.5, metalness: 0.2, roughness: 0.6,
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+
+            const defaultUp = new THREE.Vector3(0, 1, 0);
+            const cylinderAxis = new THREE.Vector3().fromArray(axis).normalize();
+            const quaternion = new THREE.Quaternion().setFromUnitVectors(defaultUp, cylinderAxis);
+            mesh.quaternion.copy(quaternion);
+            mesh.position.fromArray(center);
+
+            refs.scene.add(mesh);
+            refs.recognizedShapeHelper = mesh;
+        }
+    // CORRECTED: Removed sceneRefs from dependencies
+    }, [recognizedShape]);
 
     return <div ref={mountRef} style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }} />;
 }
-

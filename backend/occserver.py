@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Python STEP file processor using PythonOCC
-Now includes STL export storage functionality
+Now includes STL export storage functionality and RANSAC shape recognition
 """
 
 from flask import Flask, request, jsonify, send_from_directory, send_file, render_template
@@ -18,6 +18,16 @@ from datetime import datetime
 import math
 import traceback
 
+# --- NEW IMPORTS FOR RANSAC ---
+import numpy as np
+try:
+    from pyransac3d import Cylinder
+except ImportError:
+    print("WARNING: pyransac3d not installed. Shape recognition will not work.")
+    Cylinder = None
+# --- END NEW IMPORTS ---
+
+
 # PythonOCC imports
 from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.IGESControl import IGESControl_Reader
@@ -28,12 +38,15 @@ from OCC.Core.BRep import BRep_Tool
 from OCC.Core.TopLoc import TopLoc_Location
 from OCC.Core.Poly import Poly_Triangulation
 from OCC.Core.TColgp import TColgp_Array1OfPnt
-from OCC.Core.gp import gp_Pnt
+from OCC.Core.gp import gp_Pnt, gp_Ax2
 from OCC.Core.TopoDS import topods
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeCylinder
 from OCC.Core.BRepBndLib import brepbndlib
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.gp import gp_Trsf, gp_Vec, gp_Ax1
+from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
+from OCC.Core.GeomAbs import GeomAbs_Cylinder, GeomAbs_Plane
+
 # Create Flask app with static file support
 app = Flask(__name__)
 CORS(app, origins=["*"], methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["*"])
@@ -51,6 +64,8 @@ scene_objects = {}
 # Ensure directories exist
 for folder in [UPLOAD_FOLDER, STL_STORAGE_FOLDER, EXPORTS_FOLDER]:
     os.makedirs(folder, exist_ok=True)
+
+# ... (all previous helper functions like allowed_file, read_step_file, etc. remain the same) ...
 
 def allowed_file(filename):
     """Check if file extension is allowed"""
@@ -72,28 +87,22 @@ def read_iges_file(file_path):
     iges_reader.TransferRoots()
     return iges_reader.OneShape()
 
-# --- NEW HELPER FUNCTION: To center any shape ---
 def center_shape(shape):
     """Calculates the bounding box of a shape and moves its center to the origin."""
     bbox = Bnd_Box()
     brepbndlib.Add(shape, bbox)
     if bbox.IsVoid():
         return shape # Cannot center a void shape
-
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
     center_x = (xmin + xmax) / 2.0
     center_y = (ymin + ymax) / 2.0
     center_z = (zmin + zmax) / 2.0
-
     translation_vector = gp_Vec(-center_x, -center_y, -center_z)
     transform = gp_Trsf()
     transform.SetTranslation(translation_vector)
-    
-    # Apply the transformation
     shape.Move(TopLoc_Location(transform))
     print(f"Shape centered. Moved by {-center_x:.2f}, {-center_y:.2f}, {-center_z:.2f}")
     return shape
-# --- END NEW HELPER FUNCTION ---
 
 def extract_mesh_data(shape, shape_id=None):
     """Extract mesh data using an indexed geometry approach and create face maps."""
@@ -110,6 +119,27 @@ def extract_mesh_data(shape, shape_id=None):
         face = topods.Face(face_explorer.Current())
         location = TopLoc_Location()
         current_face_id = f'face_{face_index}'
+        
+        surface_props = {}
+        adaptor = BRepAdaptor_Surface(face, True)
+        surface_type = adaptor.GetType()
+
+        if surface_type == GeomAbs_Cylinder:
+            cylinder = adaptor.Cylinder()
+            axis = cylinder.Axis()
+            location_cyl = axis.Location()
+            direction = axis.Direction()
+            surface_props = {
+                'surfaceType': 'Cylinder',
+                'radius': cylinder.Radius(),
+                'center': [location_cyl.X(), location_cyl.Y(), location_cyl.Z()],
+                'axis': [direction.X(), direction.Y(), direction.Z()]
+            }
+        elif surface_type == GeomAbs_Plane:
+            surface_props = {'surfaceType': 'Plane'}
+        else:
+            surface_props = {'surfaceType': 'Other'}
+        
         triangulation = BRep_Tool.Triangulation(face, location)
 
         if triangulation:
@@ -130,10 +160,12 @@ def extract_mesh_data(shape, shape_id=None):
             num_triangles_in_face = triangulation.NbTriangles()
             face_id_by_triangle.extend([current_face_id] * num_triangles_in_face)
             
-            faces_data.append({
+            face_data = {
                 'id': current_face_id, 'vertices': face_vertices, 'indices': face_indices,
                 'vertexCount': len(face_vertices), 'triangleCount': num_triangles_in_face
-            })
+            }
+            face_data.update(surface_props)
+            faces_data.append(face_data)
 
             offset = len(global_vertices)
             global_vertices.extend(face_vertices)
@@ -157,10 +189,7 @@ def process_step_file(file_path):
         elif file_path.lower().endswith(('.iges', '.igs')): shape = read_iges_file(file_path)
         else: raise Exception("Unsupported file format")
         print("File imported successfully")
-        
-        # --- MODIFIED: Use the centering helper function ---
         shape = center_shape(shape)
-
         shape_id = uuid.uuid4().hex
         scene_objects[shape_id] = shape
         print(f"Stored shape with ID: {shape_id}")
@@ -172,6 +201,72 @@ def process_step_file(file_path):
         traceback.print_exc()
         raise e
 
+# --- NEW RANSAC ENDPOINT ---
+@app.route('/api/recognize-shape', methods=['POST'])
+def recognize_shape():
+    """Recognize a shape from a point cloud using RANSAC with an adaptive threshold."""
+    if Cylinder is None:
+        return jsonify({'success': False, 'error': 'pyransac3d is not installed on the server.'}), 500
+        
+    try:
+        data = request.get_json()
+        points_flat = data.get('points', [])
+        if not points_flat:
+            return jsonify({'success': False, 'error': 'No points provided'}), 400
+
+        points = np.array(points_flat).reshape(-1, 3)
+        
+        # --- NEW: Adaptive Threshold Calculation ---
+        # 1. Get the bounding box of the input points
+        min_bound = np.min(points, axis=0)
+        max_bound = np.max(points, axis=0)
+        
+        # 2. Calculate the diagonal of the bounding box (a measure of the overall size)
+        diagonal_length = np.linalg.norm(max_bound - min_bound)
+        
+        # 3. Set the threshold to a small percentage of the diagonal
+        # This is the key parameter to tune. 2.5% is a good starting point.
+        threshold_percentage = 0.025 
+        adaptive_threshold = diagonal_length * threshold_percentage
+        
+        print(f"Running RANSAC on {len(points)} points.")
+        print(f"Bounding box diagonal: {diagonal_length:.2f}, Adaptive threshold: {adaptive_threshold:.4f}")
+        # --- END: Adaptive Threshold Calculation ---
+
+        cyl = Cylinder()
+        # --- MODIFIED: Use the new adaptive threshold ---
+        center, axis, radius, inliers_indices = cyl.fit(points, thresh=adaptive_threshold, maxIteration=2000)
+
+        # Ensure the axis vector is a unit vector for stable calculations
+        axis_normalized = axis / np.linalg.norm(axis)
+
+        # The rest of the logic for calculating height and final center is the same
+        inlier_points = points[inliers_indices]
+        vec_from_center = inlier_points - center
+        distances = np.dot(vec_from_center, axis_normalized)
+        
+        min_dist = np.min(distances)
+        max_dist = np.max(distances)
+        height = max_dist - min_dist
+        final_center = center + axis_normalized * ((min_dist + max_dist) / 2.0)
+
+        print(f"✅ Cylinder Found! Axis: {np.round(axis_normalized, 2)}, Radius: {radius:.2f}, Height: {height:.2f}")
+
+        return jsonify({
+            'success': True,
+            'shape': 'Cylinder',
+            'center': final_center.tolist(),
+            'axis': axis_normalized.tolist(), # Send the normalized axis
+            'radius': radius,
+            'height': height
+        })
+
+    except Exception as e:
+        print(f"❌ RANSAC Error: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': 'Failed to fit a cylinder. Try selecting more faces or faces that are more clearly cylindrical.'}), 500
+# ... (all other routes like /api/create/box, /process-step, etc. remain the same) ...
+
 @app.route('/api/create/box', methods=['POST'])
 def create_box():
     """Create a box primitive."""
@@ -180,10 +275,7 @@ def create_box():
         width,height,depth = data.get('width',10), data.get('height',10), data.get('depth',10)
         print(f"Creating box with dimensions: {width}x{height}x{depth}")
         box_shape = BRepPrimAPI_MakeBox(width, height, depth).Shape()
-        
-        # --- MODIFIED: Use the centering helper function ---
         box_shape = center_shape(box_shape)
-
         shape_id = uuid.uuid4().hex
         scene_objects[shape_id] = box_shape
         print(f"Stored new box shape with ID: {shape_id}")
@@ -194,7 +286,26 @@ def create_box():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# --- The rest of your file remains untouched ---
+@app.route('/api/create/cylinder', methods=['POST'])
+def create_cylinder():
+    """Create a cylinder primitive."""
+    try:
+        data = request.get_json() or {}
+        radius = data.get('radius', 5)
+        height = data.get('height', 20)
+        print(f"Creating cylinder with radius: {radius}, height: {height}")
+        ax = gp_Ax2(gp_Pnt(0, 0, 0), gp_Vec(0, 0, 1))
+        cylinder_shape = BRepPrimAPI_MakeCylinder(ax, radius, height).Shape()
+        cylinder_shape = center_shape(cylinder_shape)
+        shape_id = uuid.uuid4().hex
+        scene_objects[shape_id] = cylinder_shape
+        print(f"Stored new cylinder shape with ID: {shape_id}")
+        mesh_data = extract_mesh_data(cylinder_shape, shape_id)
+        return jsonify({'success': True, 'message': 'Cylinder created', 'mesh': mesh_data})
+    except Exception as e:
+        print(f"❌ Error in create_cylinder: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/process-step', methods=['POST'])
 def process_step():
@@ -217,10 +328,10 @@ def process_step():
         response = {
             'success': True,
             'data': {'meshes': meshes, 'faces': total_faces,
-                'statistics': {
-                    'totalVertices': total_verts, 'totalTriangles': total_tris,
-                    'totalFaces': total_faces, 'fileName': filename, 'fileSize': file_size
-                }
+                     'statistics': {
+                         'totalVertices': total_verts, 'totalTriangles': total_tris,
+                         'totalFaces': total_faces, 'fileName': filename, 'fileSize': file_size
+                     }
             }
         }
         return jsonify(response)
@@ -232,7 +343,6 @@ def process_step():
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- All other original functions and routes are preserved ---
 @app.route('/api/transform/<shape_id>', methods=['POST'])
 def transform_shape(shape_id):
     if shape_id not in scene_objects: return jsonify({'success': False, 'error': 'Shape not found'}), 404
@@ -258,7 +368,7 @@ def transform_shape(shape_id):
 def index():
     return "PythonOCC Flask Backend is running."
 
-# (Including other routes for completeness, assuming they are part of the original file)
+# (Other routes)
 @app.route('/api/health')
 def api_health(): return jsonify({'status': 'ok'})
 @app.route('/api/store-stl', methods=['POST'])
